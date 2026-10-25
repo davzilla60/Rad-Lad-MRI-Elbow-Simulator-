@@ -30,6 +30,11 @@ cover in theory. Marker: **Elbow Grease** (all three planes cover the key anatom
    - Each plane lists the **sequences to consider**, which can be ticked (for example T1, PD FS / T2 FS, STIR,
      T2* GRE, 3D GRE / DESS, FABS, post-contrast T1 FS).
 4. **Scan → images.** Each scan shows only the real slices that fall inside your stack, cropped to your FOV.
+   - **Plan on completed sequences.** Each scanned series then appears in a "completed series" tray in the rail.
+     Drag its thumbnail onto the localiser of the same plane, or tap it, and that localiser is replaced by the real
+     images, so the later sequences are planned on sharper anatomy, as on a scanner. Scroll the panel to choose the
+     slice, and press **↺ LOCALISER** to put the localiser back. A series dropped on a different plane's panel is
+     refused with a note. CLI: `use ax|cor|sag`, `restore ax|cor|sag`.
 5. **Debrief.** Coverage for each plane, the position note, three hero images, a sequences-to-consider table, and
    the marker.
 
@@ -54,7 +59,7 @@ Typical targets (mm from the joint centre):
   - the logos.
 - `tools/gen_assets.py` rebuilds `assets/` from `../elbow-mri/slices` and `../elbow-mri/localisers`.
 
-Debug hooks: `window.__mre` (`parse(cmd)`, `gotoPlan(q)`, `autoPlan()`, `analyse(q)`, `planOK(q)`, `S()`) and
+Debug hooks: `window.__mre` (`parse(cmd)`, `gotoPlan(q)`, `useSeries(q)`, `autoPlan()`, `analyse(q)`, `planOK(q)`, `S()`) and
 `window.__room()` (`setPose`, `cam`, `snap`).
 
 ## Geometry caveat

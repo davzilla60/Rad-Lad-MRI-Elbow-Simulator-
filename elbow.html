@@ -586,6 +586,19 @@
 #scg-root .mre-heroes .scg-hero{aspect-ratio:1/1}
 #scg-root .mre-heroes canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 #scg-root .scg-ach-marker::after{content:'E'}
+/* completed-series tray: drag a series onto the localiser of the same plane */
+#scg-root .mre-tray{display:flex;gap:7px;flex-wrap:wrap}
+#scg-root .mre-thumb{position:relative;width:76px;border:1px solid var(--line);border-radius:6px;background:#000;overflow:hidden;cursor:grab;touch-action:none;user-select:none;padding:0;color:var(--ink)}
+#scg-root .mre-thumb canvas{display:block;width:100%;height:auto;pointer-events:none}
+#scg-root .mre-thumb span{position:absolute;left:0;right:0;bottom:0;font-size:8.5px;letter-spacing:.08em;padding:2px 4px;background:rgba(6,10,5,.82);text-align:left;pointer-events:none}
+#scg-root .mre-thumb.is-used{box-shadow:inset 0 0 0 2px var(--accent)}
+#scg-root .mre-thumb:hover{border-color:var(--accent)}
+.mre-ghost{position:fixed;z-index:100000;width:76px;pointer-events:none;opacity:.85;border:1px solid #5fe08a;border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.6);transform:translate(-50%,-50%)}
+#scg-root .mre-cell.is-drop{box-shadow:inset 0 0 0 2px var(--accent);background:#0b1a0e}
+#scg-root .mre-cell.is-nodrop{opacity:.45}
+#scg-root .mre-restore{position:absolute;right:5px;top:5px;z-index:4;font-size:9px;letter-spacing:.1em;padding:3px 7px;border:1px solid var(--line);border-radius:4px;background:rgba(10,14,8,.8);color:var(--ink-dim)}
+#scg-root .mre-restore:hover{border-color:var(--accent);color:var(--accent)}
+#scg-root .mre-cell.is-series .mre-lab{color:#ffe08a}
 @media (max-width:780px){ #scg-root .mre-heroes{grid-template-columns:1fr 1fr 1fr} }
 @media (max-width:470px){ #scg-root .mre-lab{font-size:8.5px;letter-spacing:.08em} #scg-root .mre-tx{font-size:9px} }
 </style>
@@ -848,7 +861,7 @@ function clone(o){ return JSON.parse(JSON.stringify(o)); }
 function freshState(){
   return { phase:"title", pos:null, loaded:false, loading:false, locDone:false,
            plan:{ ax:clone(SEQ.ax.start), cor:clone(SEQ.cor.start), sag:clone(SEQ.sag.start) },
-           done:{}, chosen:{ ax:{t1:1}, cor:{t2:1}, sag:{t1:1} }, cur:null, viewQ:null, viewK:0, list:[] };
+           done:{}, acq:{}, swap:{}, chosen:{ ax:{t1:1}, cor:{t2:1}, sag:{t1:1} }, cur:null, viewQ:null, viewK:0, list:[] };
 }
 var S = freshState();
 
@@ -1133,10 +1146,15 @@ function parseCommand(raw){
     log("commands here: "+COMMANDS.filter(function(c){ return c.phases.indexOf(S.phase)>=0; }).map(function(c){ return c.key; }).join(", ")+", help","sys");
     log("workflow: choose a position (prone | supine | side) → load → loc → plan ax | plan cor | plan sag → drag the boxes → scan → finish.","sys");
     log("while planning: slices <n> · thick <mm> · gap <mm> · fov <mm> · auto · scan · back","sys");
+    log("after a scan: use <ax|cor|sag> puts that series in place of its localiser · restore <ax|cor|sag> brings the localiser back","sys");
     return;
   }
   if(S.phase==="setup" && (t==="prone"||t==="superman"||t==="supine"||t==="overhead"||t==="backstroke"||t==="side")){
     choosePos(t==="superman"?"prone":(t==="supine"||t==="backstroke")?"overhead":t); return;
+  }
+  if((w[0]==="use"||w[0]==="restore") && PANEL[w[1]] && (S.phase==="dash"||S.phase==="plan")){
+    if(w[0]==="restore") restoreLoc(w[1]); else if(S.acq[w[1]]) useSeries(w[1]); else log("scan the "+SEQ[w[1]].name.toLowerCase()+" first.","warn");
+    return;
   }
   if(w[0]==="plan" && SEQ[w[1]] && (S.phase==="dash"||S.phase==="view"||S.phase==="plan")){ gotoPlan(w[1]); return; }
   if(S.phase==="plan" && (w[0]==="slices"||w[0]==="thick"||w[0]==="gap"||w[0]==="fov") && !isNaN(parseFloat(w[1]))){
@@ -1210,8 +1228,9 @@ function renderRail(){
         '<p>'+(names.length?names.join(" · "):"no sequence chosen")+'</p>'+
         (d?'<p>'+regionName(q, edges(q)[0])+' → '+regionName(q, edges(q)[1])+' · '+S.plan[q].n+' slices</p>':'')+
         '<button class="scg-btn'+(d?"":" is-primary")+'" type="button" data-q="'+q+'"><span>'+(d?"RE-PLAN":"PLAN")+' '+SEQ[q].name+'</span><span class="scg-key">plan '+q+'</span></button></div>';
-    }).join('')+'</div><div class="scg-hint">The localisers on the left show every plane you have scanned so far, in its colour.</div>';
+    }).join('')+'</div><div class="scg-hint">The localisers on the left show every plane you have scanned so far, in its colour.</div>'+trayBlock();
     Array.prototype.forEach.call(railBody.querySelectorAll(".mre-card button"), function(b){ b.onclick=function(){ logCmd("plan "+b.dataset.q); gotoPlan(b.dataset.q); }; });
+    bindTray();
   }
   else if(p==="plan"){
     var q=S.cur, pl=S.plan[q], a=analyse(q), ok=planOK(q), e=edges(q);
@@ -1226,12 +1245,13 @@ function renderRail(){
       '<div class="mre-step"><span>GAP</span><button type="button" data-a="gap" data-d="-0.1">−</button><output>'+pl.gap.toFixed(1)+' mm</output><button type="button" data-a="gap" data-d="0.1">+</button></div>'+
       '<div class="mre-step"><span>FOV</span><button type="button" data-a="fov" data-d="-10">−</button><output>'+pl.fov+' mm</output><button type="button" data-a="fov" data-d="10">+</button></div>'+
       '<div class="scg-hint">Anatomy in this stack:</div>'+covBlock(q)+
+      trayBlock()+
       '<div class="scg-hint">Sequences to run in this plane (tick what you would acquire):</div>'+seqList(q);
     Array.prototype.forEach.call(railBody.querySelectorAll(".mre-step button"), function(b){
       b.onclick=function(){ var d=parseFloat(b.dataset.d), pl=S.plan[S.cur];
         if(b.dataset.a==="n") setN(S.cur, pl.n+d); else if(b.dataset.a==="thk") setThk(S.cur, pl.thk+d); else if(b.dataset.a==="gap") setGap(S.cur, pl.gap+d); else setFov(S.cur, pl.fov+d); };
     });
-    bindSeqList();
+    bindSeqList(); bindTray();
   }
   else if(p==="acquire"){
     railTitle.textContent="Acquiring · "+SEQ[S.cur].name; railDesc.textContent=SER[S.cur].seq;
@@ -1261,7 +1281,8 @@ function renderInfo(){
   info.innerHTML='<b>PROTOCOL · RIGHT ELBOW</b><div>Position: '+POS[S.pos].short+'</div>'+
     ["ax","cor","sag"].map(function(q){ var d=S.done[q];
       return '<div class="mre-row"><i class="mre-sw" style="background:'+COLORS[q]+'"></i><span><b>'+SEQ[q].name+'</b> · '+(d?(S.plan[q].n+" slices · "+coverage(S.plan[q]).toFixed(0)+" mm · "+(planOK(q)?"✓":"⚠")):"not planned yet")+'</span></div>'; }).join('')+
-    '<div style="margin-top:6px">Each sequence is planned on all three localisers: the box shows the <b>slice stack</b> on the two localisers it cuts across, and the square <b>FOV</b> on the one parallel to it.</div>';
+    '<div style="margin-top:6px">Each sequence is planned on all three localisers: the box shows the <b>slice stack</b> on the two localisers it cuts across, and the square <b>FOV</b> on the one parallel to it.</div>'+
+    (Object.keys(S.acq).length?'<div>Completed series can replace the localiser of the same plane — drag them in from the tray on the right.</div>':'');
 }
 
 /* =============================================================
@@ -1329,7 +1350,7 @@ function runLocaliser(){
   locRunning=true;
   if(room3d) room3d.stop();
   setPhase("loc");
-  ["sag","cor","ax"].forEach(function(p){ var c=CELL[p]; c.img.style.display="none"; c.svg.innerHTML=""; c.cv.getContext("2d").clearRect(0,0,256,256); c.el.classList.add("is-wait"); c.lab.textContent=PANEL[p].name+" LOCALISER\nwaiting"; c.lab2.textContent=""; });
+  ["sag","cor","ax"].forEach(function(p){ var c=CELL[p]; c.img.style.display="none"; c.svg.innerHTML=""; c.cv.width=c.cv.height=256; c.el.classList.add("is-wait"); c.lab.textContent=PANEL[p].name+" LOCALISER\nwaiting"; c.lab2.textContent=""; });
   CELL.x.cv.width=CELL.x.cv.height=256; CELL.x.lab.textContent="K-SPACE"; CELL.x.lab2.textContent="";
   log("tri-plane localiser: 3 × 2D gradient echo, ~"+(3*1.4).toFixed(0)+" s on a real scanner…","sys");
   var order=["sag","cor","ax"], i=0;
@@ -1369,7 +1390,7 @@ function acquireLoc(p, done){
    ============================================================= */
 function gotoDash(){
   setPhase("dash");
-  ["sag","cor","ax"].forEach(function(p){ CELL[p].img.style.display=""; CELL[p].cv.getContext("2d").clearRect(0,0,256,256); CELL[p].lab.textContent=PANEL[p].name+" LOCALISER"; });
+  refreshCells();
   render();
   if(!Object.keys(S.done).length) log("plan each sequence: <b>plan ax</b>, <b>plan cor</b> or <b>plan sag</b> — in any order.","sys");
 }
@@ -1377,9 +1398,104 @@ function gotoPlan(q){
   S.cur=q;
   CELL.x.cv.width=CELL.x.cv.height=384;
   setPhase("plan");
-  ["sag","cor","ax"].forEach(function(p){ CELL[p].lab.textContent=PANEL[p].name+" LOCALISER"+(PANEL[p].n===SEQ[q].dir?"\n(parallel to the "+SEQ[q].name.toLowerCase()+" plane)":""); });
+  refreshCells();
   drawPreview();
   log("planning the <b>"+SEQ[q].name.toLowerCase()+"</b>: "+SEQ[q].hint,"sys");
+}
+/* ---- completed sequences can replace the localiser of the same plane ----
+   S.acq[q] = the slices acquired when q was scanned; S.swap[p] = { i } shows slice S.acq[p][i] in panel p.
+   The series shares the panel's anatomical frame, so the planning boxes sit on it unchanged. */
+function cellLabel(p){
+  var base=PANEL[p].name+" LOCALISER", extra = S.phase==="plan" && PANEL[p].n===SEQ[S.cur].dir ? "\n(parallel to the "+SEQ[S.cur].name.toLowerCase()+" plane)" : "";
+  if(!S.swap[p]) return base+extra;
+  var list=S.acq[p], k=list[S.swap[p].i], pos=SER[p].pos[k];
+  return PANEL[p].name+" · "+SER[p].seq.split(" (")[0]+" (series)\nIM "+(S.swap[p].i+1)+"/"+list.length+" · "+AX_NAMES[PANEL[p].n].slice(0,4)+" "+(pos>=0?"+":"")+pos.toFixed(0)+" mm · scroll"+extra;
+}
+function refreshCells(){
+  ["sag","cor","ax"].forEach(function(p){
+    var c=CELL[p], on=!!S.swap[p];
+    c.el.classList.toggle("is-series", on);
+    c.img.style.display = on ? "none" : "";
+    var rb=c.el.querySelector(".mre-restore");
+    if(on && !rb){ rb=document.createElement("button"); rb.type="button"; rb.className="mre-restore"; rb.textContent="↺ LOCALISER";
+      rb.onclick=function(){ logCmd("restore "+p); restoreLoc(p); }; c.el.appendChild(rb); }
+    if(!on && rb) rb.remove();
+    if(on) drawCellSeries(p); else { if(c.cv.width!==256){ c.cv.width=c.cv.height=256; } c.cv.getContext("2d").clearRect(0,0,256,256); }
+    c.lab.textContent=cellLabel(p);
+  });
+}
+function drawCellSeries(p){
+  var c=CELL[p], cv=c.cv, k=S.acq[p][S.swap[p].i];
+  if(cv.width!==512){ cv.width=cv.height=512; }
+  getImg(p+"_"+pad2(k), function(im){
+    if(!S.swap[p] || S.acq[p][S.swap[p].i]!==k) return;
+    var g=cv.getContext("2d"), f=512/LN, s=SER[p], o=C.loc[p].o, a=f*s.px/LPX;    // series px -> localiser px
+    g.setTransform(1,0,0,1,0,0); g.fillStyle="#000"; g.fillRect(0,0,512,512);
+    g.imageSmoothingEnabled=true; g.imageSmoothingQuality="high";
+    g.setTransform(a,0,0,a, f*o[0]-s.o[0]*a, f*o[1]-s.o[1]*a); g.drawImage(im,0,0);
+    g.setTransform(1,0,0,1,0,0);
+  });
+}
+function useSeries(q){
+  if(!S.acq[q]) return;
+  S.swap[q]={ i:Math.floor(S.acq[q].length/2) };
+  log(SEQ[q].name.toLowerCase()+" "+SER[q].seq.split(" (")[0]+" now replaces the "+PANEL[q].name+" localiser — sharper anatomy to plan the other planes on. Scroll it to choose the slice.","ok");
+  refreshCells(); render();
+}
+function restoreLoc(p){ delete S.swap[p]; log(PANEL[p].name+" localiser restored.","sys"); refreshCells(); render(); }
+function scrollCell(p, d){
+  var sw=S.swap[p]; if(!sw) return;
+  var i=Math.max(0, Math.min(S.acq[p].length-1, sw.i+d)); if(i===sw.i) return;
+  sw.i=i; drawCellSeries(p); CELL[p].lab.textContent=cellLabel(p);
+}
+["sag","cor","ax"].forEach(function(p){
+  CELL[p].el.addEventListener("wheel", function(e){ if(!S.swap[p] || !(S.phase==="plan"||S.phase==="dash")) return; e.preventDefault(); scrollCell(p, e.deltaY>0?1:-1); }, { passive:false });
+});
+function trayBlock(){
+  var qs=["ax","cor","sag"].filter(function(q){ return S.acq[q]; });
+  if(!qs.length) return "";
+  return '<div class="scg-hint">Completed series — <b>drag one onto its localiser</b> (or tap it) to plan on the real images:</div><div class="mre-tray">'+
+    qs.map(function(q){ return '<button type="button" class="mre-thumb'+(S.swap[q]?" is-used":"")+'" data-q="'+q+'" title="Drag onto the '+PANEL[q].name+' localiser"><canvas width="152" height="152"></canvas><span>'+PANEL[q].name+' · '+SER[q].seq.split(" (")[0]+'</span></button>'; }).join('')+'</div>';
+}
+var tdrag=null;
+function bindTray(){
+  Array.prototype.forEach.call(railBody.querySelectorAll(".mre-thumb"), function(b){
+    var q=b.dataset.q, cv=b.querySelector("canvas"), list=S.acq[q];
+    renderSlice(q, list[Math.floor(list.length/2)], cv);
+    b.addEventListener("pointerdown", function(e){
+      e.preventDefault();
+      tdrag={ q:q, x:e.clientX, y:e.clientY, moved:false, ghost:null, src:cv };
+      try{ b.setPointerCapture(e.pointerId); }catch(_){}
+    });
+    b.addEventListener("pointermove", function(e){
+      if(!tdrag) return;
+      if(!tdrag.moved && Math.hypot(e.clientX-tdrag.x, e.clientY-tdrag.y) < 6) return;
+      if(!tdrag.moved){
+        tdrag.moved=true;
+        var g=document.createElement("img"); g.className="mre-ghost"; g.src=tdrag.src.toDataURL("image/jpeg",0.8); document.body.appendChild(g); tdrag.ghost=g;
+        ["sag","cor","ax"].forEach(function(p){ CELL[p].el.classList.toggle("is-nodrop", p!==tdrag.q); });
+      }
+      tdrag.ghost.style.left=e.clientX+"px"; tdrag.ghost.style.top=e.clientY+"px";
+      CELL[tdrag.q].el.classList.toggle("is-drop", dropCell(e.clientX, e.clientY)===tdrag.q);
+    });
+    function end(e){
+      if(!tdrag) return;
+      var d=tdrag; tdrag=null;
+      if(d.ghost) d.ghost.remove();
+      ["sag","cor","ax"].forEach(function(p){ CELL[p].el.classList.remove("is-drop","is-nodrop"); });
+      if(!d.moved){ if(e.type==="pointerup"){ logCmd("use "+d.q); useSeries(d.q); } return; }   // a tap works as well as a drag
+      var over=e.type==="pointerup" ? dropCell(e.clientX, e.clientY) : null;
+      if(!over) return;
+      logCmd("use "+d.q);
+      if(over!==d.q) log("the "+SEQ[d.q].name.toLowerCase()+" images are "+PANEL[d.q].name+" slices — they can only replace the "+PANEL[d.q].name+" localiser.","warn");
+      else useSeries(d.q);
+    }
+    b.addEventListener("pointerup", end); b.addEventListener("pointercancel", end);
+  });
+}
+function dropCell(x, y){
+  var el=document.elementFromPoint(x, y), cell=el && el.closest ? el.closest(".mre-cell") : null;
+  return cell && cell.dataset.p!=="x" ? cell.dataset.p : null;
 }
 function autoPlan(){ S.plan[S.cur]=clone(SEQ[S.cur].ideal); log("auto-plan: a typical "+SEQ[S.cur].name.toLowerCase()+" stack.","sys"); afterPlan(); }
 
@@ -1398,7 +1514,10 @@ function scanSeq(){
     var f=Math.min(1,((now||performance.now())-t0)/dur);
     acqNum.textContent=SER[q].seq+" · "+S.plan[q].n+" slices · "+mmss(Math.round(total*(1-f)))+" remaining";
     if(f<1){ requestAnimationFrame(tick); return; }
-    S.done[q]=true;
+    S.done[q]=true; S.acq[q]=coveredSlices(q);
+    if(!S.acq[q].length) S.acq[q]=[seriesAt(q, S.plan[q].c[SEQ[q].dir])];
+    if(S.swap[q]) S.swap[q].i=Math.min(S.swap[q].i, S.acq[q].length-1);
+    if(Object.keys(S.done).length===1) log("tip: back on the protocol, drag this series onto the "+PANEL[q].name+" localiser to plan the other planes on real images.","sys");
     log(SEQ[q].name.toLowerCase()+" acquired — "+coveredSlices(q).length+" images in your stack.", planOK(q)?"ok":"warn");
     showSeries(q, "view");
   })();
@@ -1466,7 +1585,7 @@ function showResult(){
     '<b>Localisers:</b> simulated tri-plane 2D GRE images made from the same slices (thick-slice averaging, 180 mm FOV, 256 × 160 k-space, coil shading and noise); the k-space animation is a real Fourier transform of those images. '+
     '<b>Effects added in the browser:</b> wrap-around when the FOV is narrower than the arm, and a shading gradient for the off-centre (elbow-by-the-side) position. Sequences without images in this demo are listed for teaching only. Educational simulation — not a medical device.</div>';
   ["ax","cor","sag"].forEach(function(q){ var cv=resultEl.querySelector('canvas[data-q="'+q+'"]'), ks=coveredSlices(q); renderSlice(q, ks.length?ks[Math.floor(ks.length/2)]:seriesAt(q,0), cv); });
-  $("mreAgain").onclick=function(){ logCmd("plan again"); S.done={}; resultEl.classList.add("scg-hidden"); achWrap.classList.add("scg-hidden"); gotoDash(); };
+  $("mreAgain").onclick=function(){ logCmd("plan again"); S.done={}; S.acq={}; S.swap={}; resultEl.classList.add("scg-hidden"); achWrap.classList.add("scg-hidden"); gotoDash(); };
   resultEl.classList.remove("scg-hidden");
   achWrap.classList.toggle("scg-hidden", !all);
   if(all) playAchievement();
@@ -1483,7 +1602,7 @@ function resetAll(){
    BOOT
    ============================================================= */
 $("scgStart").onclick=function(){ titleEl.classList.add("scg-hidden"); gotoSetup(); };
-window.__mre={ S:function(){ return S; }, parse:parseCommand, analyse:analyse, planOK:planOK, gotoPlan:gotoPlan, autoPlan:autoPlan };
+window.__mre={ S:function(){ return S; }, parse:parseCommand, useSeries:useSeries, analyse:analyse, planOK:planOK, gotoPlan:gotoPlan, autoPlan:autoPlan };
 setPhase("title");
 })();
 </script>
