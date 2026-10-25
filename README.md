@@ -2,7 +2,7 @@
 
 An embeddable, single-file teaching simulator for the Rad-Lad website. It uses the same engine and layout as the
 "Scanogram" CT simulators, but for MRI. **It's a demonstration only.** It shows how much anatomy each plan would
-cover in theory. Marker: **Elbow Room** (all three planes cover the key anatomy with no wrap-around).
+cover in theory. Marker: **Elbow Grease** (all three planes cover the key anatomy with no wrap-around).
 
 ## Flow
 
